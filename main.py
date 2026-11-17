@@ -38,8 +38,10 @@ The constants below (weight scale, winsor cap, spreads) were tuned by
 leave-one-out cross-validation over the comparables themselves: each
 comparable in turn was forecast from the others and scored with the
 contest's exact pinball loss on the log scale. On launches shaped like the
-practice cases the tuned model scores about 0.28 against the house
-persistence baseline's 0.45 on the same cross-validation.
+practice cases the tuned model scores about 0.27 against the house
+persistence baseline's 0.45 on the same cross-validation. (A second tuning
+pass over the weight scale and the tight spread, after the first entry was
+in, moved the cross-validation score from 0.277 to 0.274.)
 
 The program is deterministic: fixed iteration order, no randomness, no clock,
 no network.
@@ -66,14 +68,14 @@ Z = [-1.645, -0.674, 0, 0.674, 1.645]
 # Similarity weighting: a comparable whose hour-1 count differs from the
 # case's hour-1 print by a factor of e in log space keeps exp(-WEIGHT_SCALE)
 # of its weight.
-WEIGHT_SCALE = 1.0
+WEIGHT_SCALE = 0.9
 # Log-ratios are winsorised at +/-WINSOR before pooling.
 WINSOR = 3.0
 # Spread calibration: the pooled log-ratio spread, scaled. Cross-validation
 # found the raw pooled spread too wide for launches whose pre-midnight hours
 # already drew a large audience (pre-ratio at least PRE_RATIO_SPLIT); other
 # launches keep the full pooled spread.
-SPREAD_TIGHT = 0.65
+SPREAD_TIGHT = 0.70
 SPREAD_FULL = 1.0
 PRE_RATIO_SPLIT = 1.2
 # Fallback log-space spread for an hour no comparable covers.

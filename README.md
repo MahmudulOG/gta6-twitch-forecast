@@ -21,7 +21,7 @@ mean and spread of those log-ratios give a per-hour curve around the case's
 own first hour. The weighting and spread constants were tuned by
 leave-one-out cross-validation over the comparables themselves, scored with
 the contest's exact pinball loss on the log scale: on launches shaped like
-the practice cases the tuned model scores about 0.28, against the house
+the practice cases the tuned model scores about 0.27, against the house
 persistence baseline's 0.45 on the same cross-validation.
 
 - `main.py` — the entry: Python 3.13, standard library only, no network,
