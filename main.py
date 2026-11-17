@@ -24,24 +24,30 @@ around the case's own hour-1 print:
 
     q_tau(h) = p1 * exp(mu_h + z_tau * sigma_h * SPREAD)
 
-Two refinements came out of tuning. Log-ratios are winsorised at +/-3 (a
+Three refinements came out of tuning. Log-ratios are winsorised at +/-3 (a
 factor of about 20) before pooling, so one comparable whose unlock fell many
-hours into its UTC day cannot drag an hour's mean or spread. And the spread
-calibration depends on the case's own shape: the mean of the six hours before
-the release day, relative to hour 1 (the "pre-ratio"), separates launches
-whose audience was already large before midnight UTC — every practice case
-sits between 1.3 and 2.4 — from launches that only start at a single global
-unlock moment. The former take the tight calibrated spread; the latter keep
-the full pooled spread.
+hours into its UTC day cannot drag an hour's mean or spread. The spread
+calibration depends on the case's own shape: the mean of the six hours
+before the release day, relative to hour 1 (the "pre-ratio"), separates
+launches whose audience was already large before midnight UTC — every
+practice case sits between 1.3 and 2.4 — from launches that only start at a
+single global unlock moment. The former take the tight calibrated spread;
+the latter keep the full pooled spread. And the early hours are adjusted by
+the case's own approach slope: how steeply the audience was moving into
+hour 1 (hour 1 against the mean of the three hours before the day),
+compared with the pooled comparables' approach slopes. A launch still
+falling steeply into hour 1 — every practice case is — tends to keep
+falling for a few hours before the next unlock wave, so its early means
+shift by a faded fraction of the slope difference.
 
-The constants below (weight scale, winsor cap, spreads) were tuned by
-leave-one-out cross-validation over the comparables themselves: each
-comparable in turn was forecast from the others and scored with the
-contest's exact pinball loss on the log scale. On launches shaped like the
-practice cases the tuned model scores about 0.27 against the house
-persistence baseline's 0.45 on the same cross-validation. (A second tuning
-pass over the weight scale and the tight spread, after the first entry was
-in, moved the cross-validation score from 0.277 to 0.274.)
+The constants below were tuned by leave-one-out cross-validation over the
+comparables themselves: each comparable in turn was forecast from the
+others and scored with the contest's exact pinball loss on the log scale.
+On launches shaped like the practice cases the tuned model scores about
+0.272 against the house persistence baseline's 0.45 on the same
+cross-validation. (Earlier entries of this program scored 0.277 and 0.274
+on the same cross-validation; their server practice losses were 0.2118 and
+0.2101 against the baseline's roughly 0.387.)
 
 The program is deterministic: fixed iteration order, no randomness, no clock,
 no network.
@@ -68,16 +74,21 @@ Z = [-1.645, -0.674, 0, 0.674, 1.645]
 # Similarity weighting: a comparable whose hour-1 count differs from the
 # case's hour-1 print by a factor of e in log space keeps exp(-WEIGHT_SCALE)
 # of its weight.
-WEIGHT_SCALE = 0.9
+WEIGHT_SCALE = 0.8
 # Log-ratios are winsorised at +/-WINSOR before pooling.
 WINSOR = 3.0
 # Spread calibration: the pooled log-ratio spread, scaled. Cross-validation
 # found the raw pooled spread too wide for launches whose pre-midnight hours
 # already drew a large audience (pre-ratio at least PRE_RATIO_SPLIT); other
 # launches keep the full pooled spread.
-SPREAD_TIGHT = 0.70
+SPREAD_TIGHT = 0.60
 SPREAD_FULL = 1.0
 PRE_RATIO_SPLIT = 1.2
+# Approach-slope adjustment for the early hours: hour h (2..SLOPE_HOURS)
+# takes SLOPE_BETA * (SLOPE_HOURS + 1 - h) / SLOPE_HOURS of the difference
+# between the case's own approach slope and the pooled comparables' slope.
+SLOPE_BETA = 0.6
+SLOPE_HOURS = 6
 # Fallback log-space spread for an hour no comparable covers.
 FALLBACK_SD = 0.5
 
@@ -118,8 +129,20 @@ def round2(value):
     return int(result) if float(result).is_integer() else result
 
 
+def approach_slope(series, first):
+    """Log of hour 1 over the mean of the three hours before the day.
+
+    Negative when the audience was falling into hour 1. Returns None when
+    fewer than two of those hours are present.
+    """
+    before = [series[o] for o in range(-3, 0) if o in series]
+    if len(before) < 2:
+        return None
+    return math.log(first / (sum(before) / len(before)))
+
+
 def comparable_curves(case):
-    """Extract (hour-1 count, {offset: viewers}) for each usable comparable.
+    """Extract (hour-1 count, {offset: viewers}, slope) per usable comparable.
 
     A comparable is usable when its release day's first hour is present: the
     pre-release category history bundled in every case has no launch day of
@@ -131,7 +154,7 @@ def comparable_curves(case):
         first = series.get(0)
         if first is None or first <= 0:
             continue
-        curves.append((first, series))
+        curves.append((first, series, approach_slope(series, first)))
     return curves
 
 
@@ -162,6 +185,27 @@ def forecast_case(case, name):
 
     curves = comparable_curves(case)
 
+    # The case's own approach slope, and the pooled comparables' slope with
+    # the same similarity weights the ratio pool uses. The early hours'
+    # means shift by a faded fraction of the difference.
+    own_series = hour_offsets(case["day_start"], case.get("history_hourly"), "from")
+    own_slope = approach_slope(own_series, p1)
+    slope_shift = {}
+    if own_slope is not None:
+        num = 0.0
+        den = 0.0
+        for comp_first, _series, comp_slope in curves:
+            if comp_slope is None:
+                continue
+            w = math.exp(-WEIGHT_SCALE * abs(math.log(comp_first / p1)))
+            num += w * comp_slope
+            den += w
+        if den > 0:
+            diff = own_slope - num / den
+            for hour in range(2, SLOPE_HOURS + 1):
+                fade = (SLOPE_HOURS + 1 - hour) / SLOPE_HOURS
+                slope_shift[hour] = SLOPE_BETA * fade * diff
+
     # Per forecast hour, pool the comparables' log-ratios to their own
     # hour-1 counts, weighted by hour-1 similarity to this case.
     rows = []
@@ -169,7 +213,7 @@ def forecast_case(case, name):
         hour = row["hour"]
         offset = hour - 1
         weighted = []
-        for comp_first, series in curves:
+        for comp_first, series, _slope in curves:
             viewers = series.get(offset)
             if viewers is None or viewers <= 0:
                 continue
@@ -184,6 +228,7 @@ def forecast_case(case, name):
             sd = math.sqrt(max(var, 1e-9))
         else:
             mu, sd = 0.0, FALLBACK_SD
+        mu += slope_shift.get(hour, 0.0)
         quantiles = []
         for z in Z:
             q = p1 * math.exp(mu + z * sd * spread)
